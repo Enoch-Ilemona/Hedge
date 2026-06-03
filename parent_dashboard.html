@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SafeWatch — Parent Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --surface: #111827;
+    --surface2: #1a2236;
+    --border: #1e2d45;
+    --accent: #00e5ff;
+    --accent2: #ff4b6e;
+    --accent3: #39ff7e;
+    --text: #e8f0fe;
+    --muted: #5a7090;
+    --warn: #ffb340;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Grid noise background ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .wrap { position: relative; z-index: 1; max-width: 960px; margin: 0 auto; padding: 24px 20px; }
+
+  /* ── Header ── */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 32px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .logo {
+    display: flex; align-items: center; gap: 12px;
+  }
+  .logo-icon {
+    width: 40px; height: 40px;
+    background: linear-gradient(135deg, var(--accent), #0077ff);
+    border-radius: 10px;
+    display: grid; place-items: center;
+    font-size: 20px;
+  }
+  .logo h1 {
+    font-size: 1.4rem; font-weight: 800; letter-spacing: -0.5px;
+  }
+  .logo span { color: var(--accent); }
+
+  #conn-status {
+    display: flex; align-items: center; gap: 8px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.72rem;
+    padding: 6px 14px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    transition: all 0.3s;
+  }
+  #conn-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+  }
+  #conn-status.connected { border-color: var(--accent3); color: var(--accent3); }
+  #conn-status.connected #conn-dot { background: var(--accent3); box-shadow: 0 0 8px var(--accent3); animation: pulse 1.5s infinite; }
+  #conn-status.error { border-color: var(--accent2); color: var(--accent2); }
+  #conn-status.error #conn-dot { background: var(--accent2); }
+
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* ── Config Bar ── */
+  .config-bar {
+    display: flex; gap: 12px; align-items: flex-end;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+  }
+  .field { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 200px; }
+  .field label { font-size: 0.72rem; font-family: 'Space Mono', monospace; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+  .field input {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.82rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .field input:focus { border-color: var(--accent); }
+
+  .btn {
+    padding: 11px 24px;
+    border-radius: 8px;
+    border: none;
+    font-family: 'DM Sans', sans-serif;
+    font-weight: 700;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+  .btn-primary { background: var(--accent); color: #000; }
+  .btn-primary:hover { background: #33eaff; transform: translateY(-1px); }
+  .btn-danger { background: var(--accent2); color: #fff; }
+  .btn-danger:hover { background: #ff6b86; transform: translateY(-1px); }
+
+  /* ── Stats Row ── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 20px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+  .stat-card::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 2px;
+  }
+  .stat-card.cyan::before { background: var(--accent); }
+  .stat-card.green::before { background: var(--accent3); }
+  .stat-card.orange::before { background: var(--warn); }
+  .stat-card.red::before { background: var(--accent2); }
+
+  .stat-label { font-size: 0.7rem; font-family: 'Space Mono', monospace; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .stat-value { font-size: 2rem; font-weight: 800; line-height: 1; letter-spacing: -1px; }
+  .stat-value.cyan { color: var(--accent); }
+  .stat-value.green { color: var(--accent3); }
+  .stat-value.orange { color: var(--warn); }
+  .stat-value.red { color: var(--accent2); }
+  .stat-sub { font-size: 0.72rem; color: var(--muted); margin-top: 4px; }
+
+  /* ── Signal Gauge ── */
+  .gauge-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 24px;
+    margin-bottom: 28px;
+  }
+  .gauge-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+  .gauge-title { font-weight: 700; font-size: 0.9rem; }
+  #signal-badge {
+    font-family: 'Space Mono', monospace; font-size: 0.72rem;
+    padding: 4px 12px; border-radius: 20px;
+    background: var(--surface2); color: var(--muted);
+    transition: all 0.4s;
+  }
+
+  .gauge-bar-track {
+    height: 12px; border-radius: 6px;
+    background: var(--surface2);
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+  #gauge-fill {
+    height: 100%; width: 0%;
+    border-radius: 6px;
+    background: linear-gradient(90deg, var(--accent2), var(--warn), var(--accent3));
+    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .gauge-labels { display: flex; justify-content: space-between; font-size: 0.65rem; font-family: 'Space Mono', monospace; color: var(--muted); }
+
+  /* ── Live Feed Table ── */
+  .feed-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+    margin-bottom: 28px;
+  }
+  .feed-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .feed-title { font-weight: 700; font-size: 0.9rem; display: flex; align-items: center; gap: 8px; }
+  .live-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--accent2);
+    animation: pulse 1s infinite;
+  }
+  #row-count { font-family: 'Space Mono', monospace; font-size: 0.72rem; color: var(--muted); }
+
+  .feed-table-wrap { overflow-x: auto; max-height: 320px; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    font-family: 'Space Mono', monospace; font-size: 0.65rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 1px;
+    padding: 10px 16px; text-align: left;
+    background: var(--surface);
+    position: sticky; top: 0; z-index: 2;
+    border-bottom: 1px solid var(--border);
+  }
+  tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s;
+  }
+  tbody tr:last-child { border-bottom: none; }
+  tbody tr:hover { background: var(--surface2); }
+  tbody tr.new-row { animation: rowIn 0.4s ease; }
+  td {
+    padding: 10px 16px; font-size: 0.82rem;
+    font-family: 'Space Mono', monospace;
+  }
+  td.time-col { color: var(--muted); font-size: 0.72rem; }
+  td.rssi-col { font-weight: 700; }
+  td.dist-col { color: var(--accent); }
+
+  .quality-badge {
+    display: inline-block; padding: 2px 10px; border-radius: 10px;
+    font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+  }
+  .q-excellent { background: rgba(57,255,126,0.15); color: var(--accent3); }
+  .q-good { background: rgba(0,229,255,0.15); color: var(--accent); }
+  .q-fair { background: rgba(255,179,64,0.15); color: var(--warn); }
+  .q-weak, .q-very-weak { background: rgba(255,75,110,0.15); color: var(--accent2); }
+
+  @keyframes rowIn {
+    from { opacity: 0; transform: translateX(-10px); background: rgba(0,229,255,0.08); }
+    to   { opacity: 1; transform: translateX(0); background: transparent; }
+  }
+
+  /* ── RSSI Chart ── */
+  .chart-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 24px;
+    margin-bottom: 28px;
+  }
+  .chart-title { font-weight: 700; font-size: 0.9rem; margin-bottom: 16px; }
+  canvas { width: 100% !important; }
+
+  /* ── Alert Banner ── */
+  #alert-banner {
+    display: none;
+    padding: 14px 20px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    border: 1px solid var(--accent2);
+    background: rgba(255,75,110,0.1);
+    color: var(--accent2);
+    font-weight: 600;
+    font-size: 0.88rem;
+    animation: slideDown 0.3s ease;
+  }
+  @keyframes slideDown { from{transform:translateY(-10px);opacity:0} to{transform:translateY(0);opacity:1} }
+
+  /* ── Empty State ── */
+  #empty-state {
+    text-align: center; padding: 48px 20px; color: var(--muted);
+  }
+  #empty-state .icon { font-size: 3rem; margin-bottom: 12px; opacity: 0.4; }
+  #empty-state p { font-size: 0.88rem; }
+
+  /* ── Footer ── */
+  footer {
+    text-align: center; padding-top: 16px; border-top: 1px solid var(--border);
+    font-size: 0.72rem; color: var(--muted); font-family: 'Space Mono', monospace;
+  }
+
+  /* ── Device ID ── */
+  .device-id {
+    font-family: 'Space Mono', monospace; font-size: 0.72rem;
+    color: var(--accent); background: rgba(0,229,255,0.08);
+    padding: 3px 10px; border-radius: 6px; border: 1px solid rgba(0,229,255,0.2);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="logo">
+      <div class="logo-icon">🛡️</div>
+      <h1>Safe<span>Watch</span></h1>
+    </div>
+    <div id="conn-status">
+      <div id="conn-dot"></div>
+      <span id="conn-text">Disconnected</span>
+    </div>
+  </header>
+
+  <!-- Config -->
+  <div class="config-bar">
+    <div class="field">
+      <label>Server WebSocket URL</label>
+      <input type="text" id="server-url" placeholder="ws://your-server.com:8765" value="ws://localhost:8765">
+    </div>
+    <button class="btn btn-primary" onclick="connect()">Connect</button>
+    <button class="btn btn-danger" onclick="disconnect()" id="disc-btn" style="display:none">Disconnect</button>
+  </div>
+
+  <!-- Alert -->
+  <div id="alert-banner"></div>
+
+  <!-- Stats -->
+  <div class="stats-row">
+    <div class="stat-card cyan">
+      <div class="stat-label">Current RSSI</div>
+      <div class="stat-value cyan" id="stat-rssi">—</div>
+      <div class="stat-sub">dBm signal strength</div>
+    </div>
+    <div class="stat-card green">
+      <div class="stat-label">Est. Distance</div>
+      <div class="stat-value green" id="stat-dist">—</div>
+      <div class="stat-sub">metres from device</div>
+    </div>
+    <div class="stat-card orange">
+      <div class="stat-label">Total Updates</div>
+      <div class="stat-value orange" id="stat-count">0</div>
+      <div class="stat-sub">readings received</div>
+    </div>
+    <div class="stat-card red">
+      <div class="stat-label">Last Seen</div>
+      <div class="stat-value" id="stat-time" style="font-size:1.1rem;color:var(--text)">—</div>
+      <div class="stat-sub">timestamp</div>
+    </div>
+  </div>
+
+  <!-- Device MAC -->
+  <div style="margin-bottom:20px; display:flex; align-items:center; gap:10px;">
+    <span style="font-size:0.8rem; color:var(--muted);">Child Device:</span>
+    <span class="device-id" id="device-mac-display">Awaiting connection...</span>
+  </div>
+
+  <!-- Signal Gauge -->
+  <div class="gauge-wrap">
+    <div class="gauge-header">
+      <div class="gauge-title">📡 Signal Strength Gauge</div>
+      <div id="signal-badge">No Signal</div>
+    </div>
+    <div class="gauge-bar-track">
+      <div id="gauge-fill"></div>
+    </div>
+    <div class="gauge-labels">
+      <span>Very Weak (-100)</span>
+      <span>Weak (-80)</span>
+      <span>Fair (-70)</span>
+      <span>Good (-60)</span>
+      <span>Excellent (-50+)</span>
+    </div>
+  </div>
+
+  <!-- Chart -->
+  <div class="chart-wrap">
+    <div class="chart-title">📈 RSSI History (last 30 readings)</div>
+    <canvas id="rssi-chart" height="120"></canvas>
+  </div>
+
+  <!-- Live Feed -->
+  <div class="feed-wrap">
+    <div class="feed-header">
+      <div class="feed-title">
+        <div class="live-dot"></div>
+        Live Feed
+      </div>
+      <span id="row-count">0 readings</span>
+    </div>
+    <div class="feed-table-wrap">
+      <div id="empty-state">
+        <div class="icon">📡</div>
+        <p>Waiting for data from child's device...</p>
+      </div>
+      <table id="feed-table" style="display:none">
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>RSSI (dBm)</th>
+            <th>Est. Distance</th>
+            <th>Quality</th>
+            <th>Raw Data</th>
+          </tr>
+        </thead>
+        <tbody id="feed-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>SafeWatch Incident Management Dashboard · Real-time Bluetooth Monitoring</footer>
+</div>
+
+<script>
+// ── State ──
+let ws = null;
+let totalCount = 0;
+let rssiHistory = [];
+let connectedMAC = null;
+const MAX_ROWS = 50;
+const MAX_CHART = 30;
+
+// ── Canvas Chart ──
+const canvas = document.getElementById('rssi-chart');
+const ctx = canvas.getContext('2d');
+
+function drawChart() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = 120 * dpr;
+  ctx.scale(dpr, dpr);
+
+  const W = rect.width, H = 120;
+  ctx.clearRect(0, 0, W, H);
+
+  if (rssiHistory.length < 2) return;
+
+  const pad = { top: 10, right: 10, bottom: 20, left: 40 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+
+  const minV = Math.min(...rssiHistory) - 5;
+  const maxV = Math.max(...rssiHistory) + 5;
+
+  const xScale = i => pad.left + (i / (rssiHistory.length - 1)) * cW;
+  const yScale = v => pad.top + (1 - (v - minV) / (maxV - minV)) * cH;
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(30,45,69,1)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (i / 4) * cH;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    const val = Math.round(maxV - (i / 4) * (maxV - minV));
+    ctx.fillStyle = 'rgba(90,112,144,0.8)';
+    ctx.font = '10px Space Mono, monospace';
+    ctx.fillText(val, 0, y + 4);
+  }
+
+  // Area fill
+  const grad = ctx.createLinearGradient(0, pad.top, 0, H);
+  grad.addColorStop(0, 'rgba(0,229,255,0.3)');
+  grad.addColorStop(1, 'rgba(0,229,255,0)');
+  ctx.beginPath();
+  ctx.moveTo(xScale(0), yScale(rssiHistory[0]));
+  for (let i = 1; i < rssiHistory.length; i++) ctx.lineTo(xScale(i), yScale(rssiHistory[i]));
+  ctx.lineTo(xScale(rssiHistory.length - 1), H - pad.bottom);
+  ctx.lineTo(xScale(0), H - pad.bottom);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  ctx.moveTo(xScale(0), yScale(rssiHistory[0]));
+  for (let i = 1; i < rssiHistory.length; i++) ctx.lineTo(xScale(i), yScale(rssiHistory[i]));
+  ctx.strokeStyle = '#00e5ff';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // Latest dot
+  const lx = xScale(rssiHistory.length - 1);
+  const ly = yScale(rssiHistory[rssiHistory.length - 1]);
+  ctx.beginPath(); ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+  ctx.fillStyle = '#00e5ff'; ctx.fill();
+}
+
+window.addEventListener('resize', drawChart);
+
+// ── RSSI → Distance ──
+function rssiToDistance(rssi, txPower = -59) {
+  if (rssi === 0) return null;
+  const ratio = rssi / txPower;
+  if (ratio < 1.0) return (ratio ** 10).toFixed(2);
+  return (0.89976 * (ratio ** 7.7095) + 0.111).toFixed(2);
+}
+
+function getQuality(rssi) {
+  if (rssi >= -50) return { label: 'Excellent', cls: 'q-excellent' };
+  if (rssi >= -60) return { label: 'Good', cls: 'q-good' };
+  if (rssi >= -70) return { label: 'Fair', cls: 'q-fair' };
+  if (rssi >= -80) return { label: 'Weak', cls: 'q-weak' };
+  return { label: 'Very Weak', cls: 'q-very-weak' };
+}
+
+function updateGauge(rssi) {
+  // Map RSSI -100...-30 to 0-100%
+  const pct = Math.min(100, Math.max(0, ((rssi + 100) / 70) * 100));
+  document.getElementById('gauge-fill').style.width = pct + '%';
+  const q = getQuality(rssi);
+  const badge = document.getElementById('signal-badge');
+  badge.textContent = q.label;
+  badge.style.background = '';
+  badge.style.color = '';
+  badge.className = '';
+}
+
+// ── Process incoming update ──
+function handleUpdate(data) {
+  const rssi = data.rssi;
+  const dist = data.distance_m ?? rssiToDistance(rssi);
+  const q = getQuality(rssi);
+  const ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '—';
+
+  // Stats
+  document.getElementById('stat-rssi').textContent = rssi + ' dBm';
+  document.getElementById('stat-dist').textContent = dist ? '~' + dist + 'm' : '—';
+  document.getElementById('stat-time').textContent = ts;
+  totalCount++;
+  document.getElementById('stat-count').textContent = totalCount;
+
+  // MAC display
+  if (data.mac && data.mac !== connectedMAC) {
+    connectedMAC = data.mac;
+    document.getElementById('device-mac-display').textContent = data.mac;
+  }
+
+  // Gauge
+  updateGauge(rssi);
+
+  // Chart
+  rssiHistory.push(rssi);
+  if (rssiHistory.length > MAX_CHART) rssiHistory.shift();
+  drawChart();
+
+  // Alert if very weak
+  const alertEl = document.getElementById('alert-banner');
+  if (rssi < -80) {
+    alertEl.style.display = 'block';
+    alertEl.textContent = `⚠️ Signal very weak (${rssi} dBm) — child may be out of range!`;
+  } else {
+    alertEl.style.display = 'none';
+  }
+
+  // Table
+  document.getElementById('empty-state').style.display = 'none';
+  document.getElementById('feed-table').style.display = 'table';
+
+  const tbody = document.getElementById('feed-body');
+  const raw = data.raw_data || '—';
+  const shortRaw = raw.length > 24 ? raw.substring(0, 24) + '…' : raw;
+
+  const tr = document.createElement('tr');
+  tr.className = 'new-row';
+  tr.innerHTML = `
+    <td class="time-col">${data.timestamp || ts}</td>
+    <td class="rssi-col" style="color:${rssi >= -60 ? 'var(--accent3)' : rssi >= -75 ? 'var(--warn)' : 'var(--accent2)'}">${rssi}</td>
+    <td class="dist-col">${dist ? '~' + dist + 'm' : '—'}</td>
+    <td><span class="quality-badge ${q.cls}">${q.label}</span></td>
+    <td style="color:var(--muted);font-size:0.7rem;">${shortRaw}</td>
+  `;
+  tbody.insertBefore(tr, tbody.firstChild);
+
+  // Trim table
+  while (tbody.rows.length > MAX_ROWS) tbody.deleteRow(tbody.rows.length - 1);
+  document.getElementById('row-count').textContent = totalCount + ' readings';
+}
+
+// ── WebSocket ──
+function setStatus(state, text) {
+  const el = document.getElementById('conn-status');
+  el.className = state;
+  document.getElementById('conn-text').textContent = text;
+}
+
+function connect() {
+  const url = document.getElementById('server-url').value.trim();
+  if (!url) return alert('Please enter a server URL.');
+  if (ws) ws.close();
+
+  setStatus('', 'Connecting…');
+
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    setStatus('connected', 'Connected');
+    document.getElementById('disc-btn').style.display = 'inline-block';
+    // Identify as parent
+    ws.send(JSON.stringify({ role: 'parent' }));
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'location_update') {
+        handleUpdate(msg);
+      } else if (msg.type === 'initial_state' && msg.devices) {
+        msg.devices.forEach(handleUpdate);
+      } else if (msg.type === 'device_connected') {
+        document.getElementById('device-mac-display').textContent = msg.mac;
+      } else if (msg.type === 'device_disconnected') {
+        setStatus('connected', 'Child offline');
+        document.getElementById('alert-banner').style.display = 'block';
+        document.getElementById('alert-banner').textContent = `🔴 Child device (${msg.mac}) has disconnected!`;
+      }
+    } catch(err) { console.error('Parse error:', err); }
+  };
+
+  ws.onerror = () => setStatus('error', 'Connection Error');
+  ws.onclose = () => {
+    setStatus('error', 'Disconnected');
+    document.getElementById('disc-btn').style.display = 'none';
+  };
+}
+
+function disconnect() {
+  if (ws) { ws.close(); ws = null; }
+  setStatus('', 'Disconnected');
+  document.getElementById('disc-btn').style.display = 'none';
+}
+
+// Initial chart render
+drawChart();
+</script>
+</body>
+</html>
