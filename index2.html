@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hedge Guardian View</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+</head>
+<body class="bg-gray-900 text-white font-sans antialiased transition-colors duration-500" id="body-bg">
+
+    <div class="max-w-md mx-auto min-h-screen flex flex-col justify-between p-6">
+        
+        <header class="text-center py-4">
+            <h1 class="text-2xl font-black tracking-wider text-emerald-400" id="app-title">HEDGE</h1>
+            <p class="text-gray-400 text-xs">Micro-Location Proximity Tracker</p>
+        </header>
+
+        <main class="flex-1 flex flex-col justify-center items-center my-6">
+            <div id="status-card" class="w-full bg-gray-800 rounded-3xl p-8 text-center shadow-xl border border-gray-700 transition-all duration-500">
+                
+                <div class="flex justify-center mb-6">
+                    <div id="status-pulse" class="w-24 h-24 rounded-full bg-emerald-500/20 flex items-center justify-center animate-pulse">
+                        <div id="status-dot" class="w-12 h-12 rounded-full bg-emerald-500 flex items-center justify-center">
+                            📡
+                        </div>
+                    </div>
+                </div>
+
+                <h2 id="child-name" class="text-xl font-bold mb-1">Waiting for Beacon...</h2>
+                <h3 id="child-id" class="text-sm text-gray-500 mb-1">CH_--</h3>
+                <p id="system-message" class="text-gray-400 text-sm mb-6">Start your simulation loop to transmit signal details.</p>
+                
+                <hr class="border-gray-700 my-4">
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="bg-gray-850 p-3 rounded-xl border border-gray-700/50">
+                        <p class="text-xs text-gray-400 uppercase tracking-wider">Signal (RSSI)</p>
+                        <p id="rssi-val" class="text-lg font-bold text-gray-200">-- dBm</p>
+                    </div>
+                    <div class="bg-gray-850 p-3 rounded-xl border border-gray-700/50">
+                        <p class="text-xs text-gray-400 uppercase tracking-wider">Status</p>
+                        <p id="status-val" class="text-lg font-bold text-emerald-400">STANDBY</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <footer id="emergency-action" class="w-full hidden animate-bounce">
+            <button class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 px-6 rounded-2xl shadow-lg uppercase tracking-wide text-sm transition-all">
+                Escalate to Venue Security
+            </button>
+        </footer>
+    </div>
+
+    <audio id="alarm-sound" src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg" preload="auto" loop></audio>
+
+              <script>
+        const bodyBg = document.getElementById('body-bg');
+        const statusCard = document.getElementById('status-card');
+        const statusDot = document.getElementById('status-dot');
+        const statusPulse = document.getElementById('status-pulse');
+        const childName = document.getElementById('child-name');
+        const childId = document.getElementById('child-id');
+        const systemMessage = document.getElementById('system-message');
+        const rssiVal = document.getElementById('rssi-val');
+        const statusVal = document.getElementById('status-val');
+        const emergencyAction = document.getElementById('emergency-action');
+        const alarmSound = document.getElementById('alarm-sound');
+
+        let socket;
+        let audioReady = false;
+        let reconnectAttempts = 0;
+
+        // Enable audio on first click
+        function enableAudio() {
+            if (!audioReady) {
+                alarmSound.play().then(() => {
+                    alarmSound.pause();
+                    alarmSound.currentTime = 0;
+                    audioReady = true;
+                }).catch(() => {});
+            }
+        }
+        document.addEventListener('click', enableAudio, { once: true });
+
+        function connect() {
+            // Try BOTH addresses - one will work
+            const addresses = [
+                'ws://localhost:8000/ws/monitor',
+                'ws://127.0.0.1:8000/ws/monitor',
+                'ws://192.168.1.100:8000/ws/monitor'  // REPLACE with your server IP if different
+            ];
+            
+            const wsUrl = addresses[reconnectAttempts % addresses.length];
+            
+            console.log(`Attempt ${reconnectAttempts + 1}: Connecting to ${wsUrl}...`);
+            systemMessage.innerText = `Connecting to ${wsUrl}...`;
+            
+            socket = new WebSocket(wsUrl);
+
+            socket.onopen = function() {
+                console.log("✅ Connected to Hedge Engine!");
+                reconnectAttempts = 0;
+                systemMessage.innerText = "Scanning for device...";
+            };
+
+            socket.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                console.log("📥 Received:", data);
+                
+                childName.innerText = data.child_name;
+                childId.innerText = data.child_id;
+                rssiVal.innerText = data.rssi + " dBm";
+                systemMessage.innerText = data.message;
+                statusVal.innerText = data.status;
+
+                if (data.status === "SECURE") {
+                    bodyBg.className = "bg-gray-900 text-white font-sans antialiased transition-colors duration-500";
+                    statusCard.className = "w-full bg-gray-800 rounded-3xl p-8 text-center shadow-xl border border-gray-700 transition-all duration-500";
+                    statusDot.className = "w-12 h-12 rounded-full bg-emerald-500 flex items-center justify-center";
+                    statusPulse.className = "w-24 h-24 rounded-full bg-emerald-500/20 flex items-center justify-center animate-pulse";
+                    statusVal.className = "text-lg font-bold text-emerald-400";
+                    statusVal.innerText = "SECURE";
+                    emergencyAction.classList.add('hidden');
+                    alarmSound.pause();
+                } 
+                else if (data.status === "NOT_FOUND") {
+                    bodyBg.className = "bg-yellow-950 text-white font-sans antialiased transition-colors duration-500";
+                    statusCard.className = "w-full bg-yellow-900/80 rounded-3xl p-8 text-center shadow-2xl border border-yellow-500 transition-all duration-500";
+                    statusDot.className = "w-12 h-12 rounded-full bg-yellow-500 flex items-center justify-center animate-bounce";
+                    statusPulse.className = "w-24 h-24 rounded-full bg-yellow-600/40 flex items-center justify-center";
+                    statusVal.className = "text-lg font-bold text-yellow-200";
+                    statusVal.innerText = "WEAK";
+                    emergencyAction.classList.remove('hidden');
+                } 
+                else if (data.status === "BREACH") {
+                    bodyBg.className = "bg-red-950 text-white font-sans antialiased transition-colors duration-500";
+                    statusCard.className = "w-full bg-red-900 rounded-3xl p-8 text-center shadow-2xl border border-red-500 transition-all duration-500";
+                    statusDot.className = "w-12 h-12 rounded-full bg-red-500 flex items-center justify-center animate-ping";
+                    statusPulse.className = "w-24 h-24 rounded-full bg-red-600/40 flex items-center justify-center";
+                    statusVal.className = "text-lg font-bold text-red-200";
+                    statusVal.innerText = "LOST";
+                    emergencyAction.classList.remove('hidden');
+                    
+                    if (audioReady) {
+                        alarmSound.play().catch(() => {});
+                    }
+                } 
+                else {
+                    bodyBg.className = "bg-gray-900 text-white font-sans antialiased transition-colors duration-500";
+                    statusCard.className = "w-full bg-gray-800 rounded-3xl p-8 text-center border border-gray-700 transition-all duration-500";
+                    statusDot.className = "w-12 h-12 rounded-full bg-gray-500 flex items-center justify-center";
+                    statusPulse.className = "w-24 h-24 rounded-full bg-gray-700/30 flex items-center justify-center";
+                }
+            };
+
+            socket.onclose = function(e) {
+                console.log(`❌ Closed (code ${e.code}), retrying...`);
+                reconnectAttempts++;
+                if (reconnectAttempts < 10) {
+                    setTimeout(connect, 2000);
+                }
+            };
+
+            socket.onerror = function(e) {
+                console.log("⚠️ Error, will retry...");
+            };
+        }
+
+        connect();
+    </script>
+</body>
+</html>
