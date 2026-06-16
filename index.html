@@ -33,11 +33,11 @@
                 <hr class="border-gray-700 my-4">
 
                 <div class="grid grid-cols-2 gap-4">
-                    <div class="bg-gray-850 p-3 rounded-xl border border-gray-700/50">
+                    <div class="bg-gray-900 p-3 rounded-xl border border-gray-700/50">
                         <p class="text-xs text-gray-400 uppercase tracking-wider">Signal (RSSI)</p>
                         <p id="rssi-val" class="text-lg font-bold text-gray-200">-- dBm</p>
                     </div>
-                    <div class="bg-gray-850 p-3 rounded-xl border border-gray-700/50">
+                    <div class="bg-gray-900 p-3 rounded-xl border border-gray-700/50">
                         <p class="text-xs text-gray-400 uppercase tracking-wider">Status</p>
                         <p id="status-val" class="text-lg font-bold text-emerald-400">STANDBY</p>
                     </div>
@@ -54,7 +54,7 @@
 
     <audio id="alarm-sound" src="https://actions.google.com/sounds/v1/alarms/digital_watch_alarm_long.ogg" preload="auto" loop></audio>
 
-              <script>
+    <script>
         const bodyBg = document.getElementById('body-bg');
         const statusCard = document.getElementById('status-card');
         const statusDot = document.getElementById('status-dot');
@@ -71,7 +71,6 @@
         let audioReady = false;
         let reconnectAttempts = 0;
 
-        // Enable audio on first click
         function enableAudio() {
             if (!audioReady) {
                 alarmSound.play().then(() => {
@@ -84,88 +83,77 @@
         document.addEventListener('click', enableAudio, { once: true });
 
         function connect() {
-            // Try BOTH addresses - one will work
-            const addresses = [
-                'ws://localhost:8000/ws/monitor',
-                'ws://127.0.0.1:8000/ws/monitor',
-                'ws://192.168.1.100:8000/ws/monitor'  // REPLACE with your server IP if different
-            ];
+    // ◄ FIX 1: Force it to explicitly use Render. No local fallbacks to confuse the loop.
+    const wsUrl = 'wss://hedge-2.onrender.com/ws/monitor'; 
+    
+    console.log(`🔌 [HEDGE] Connecting directly to Cloud Engine: ${wsUrl}`);
+    systemMessage.innerText = `Connecting to cloud engine (Attempt ${reconnectAttempts + 1})...`;
+    
+    socket = new WebSocket(wsUrl);
+
+    socket.onopen = function() {
+        console.log("✅ [HEDGE] Connected securely to live Render WebSocket pipe!");
+        reconnectAttempts = 0;
+        systemMessage.innerText = "Scanning for beacon signals...";
+    };
+
+    socket.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+        console.log("📥 [HEDGE] Telemetry received:", data);
+        
+        // Update layout text elements
+        childName.innerText = data.child_name || "Ifeoluwa Olaloye";
+        childId.innerText = data.child_id || "CH_01";
+        rssiVal.innerText = data.rssi + " dBm";
+        systemMessage.innerText = data.message;
+        statusVal.innerText = data.status;
+
+        // Visual state transformations
+        if (data.status === "SECURE") {
+            bodyBg.className = "bg-gray-900 text-white font-sans antialiased transition-colors duration-500";
+            statusCard.className = "w-full bg-gray-800 rounded-3xl p-8 text-center shadow-xl border border-gray-700 transition-all duration-500";
+            statusDot.className = "w-12 h-12 rounded-full bg-emerald-500 flex items-center justify-center";
+            statusPulse.className = "w-24 h-24 rounded-full bg-emerald-500/20 flex items-center justify-center animate-pulse";
+            statusVal.className = "text-lg font-bold text-emerald-400";
+            emergencyAction.classList.add('hidden');
+            alarmSound.pause();
+        } 
+        else if (data.status === "NOT_FOUND") {
+            bodyBg.className = "bg-yellow-950 text-white font-sans antialiased transition-colors duration-500";
+            statusCard.className = "w-full bg-yellow-900/80 rounded-3xl p-8 text-center shadow-2xl border border-yellow-500 transition-all duration-500";
+            statusDot.className = "w-12 h-12 rounded-full bg-yellow-500 flex items-center justify-center animate-bounce";
+            statusPulse.className = "w-24 h-24 rounded-full bg-yellow-600/40 flex items-center justify-center";
+            statusVal.className = "text-lg font-bold text-yellow-200";
+            statusVal.innerText = "WEAK";
+            emergencyAction.classList.remove('hidden');
+            alarmSound.pause();
+        } 
+        else if (data.status === "BREACH") {
+            bodyBg.className = "bg-red-950 text-white font-sans antialiased transition-colors duration-500";
+            statusCard.className = "w-full bg-red-900 rounded-3xl p-8 text-center shadow-2xl border border-red-500 transition-all duration-500";
+            statusDot.className = "w-12 h-12 rounded-full bg-red-500 flex items-center justify-center";
+            statusPulse.className = "w-24 h-24 rounded-full bg-red-600/40 flex items-center justify-center animate-ping";
+            statusVal.className = "text-lg font-bold text-red-200";
+            statusVal.innerText = "LOST";
+            emergencyAction.classList.remove('hidden');
             
-            const wsUrl = addresses[reconnectAttempts % addresses.length];
-            
-            console.log(`Attempt ${reconnectAttempts + 1}: Connecting to ${wsUrl}...`);
-            systemMessage.innerText = `Connecting to ${wsUrl}...`;
-            
-            socket = new WebSocket(wsUrl);
-
-            socket.onopen = function() {
-                console.log("✅ Connected to Hedge Engine!");
-                reconnectAttempts = 0;
-                systemMessage.innerText = "Scanning for device...";
-            };
-
-            socket.onmessage = function(event) {
-                const data = JSON.parse(event.data);
-                console.log("📥 Received:", data);
-                
-                childName.innerText = data.child_name;
-                childId.innerText = data.child_id;
-                rssiVal.innerText = data.rssi + " dBm";
-                systemMessage.innerText = data.message;
-                statusVal.innerText = data.status;
-
-                if (data.status === "SECURE") {
-                    bodyBg.className = "bg-gray-900 text-white font-sans antialiased transition-colors duration-500";
-                    statusCard.className = "w-full bg-gray-800 rounded-3xl p-8 text-center shadow-xl border border-gray-700 transition-all duration-500";
-                    statusDot.className = "w-12 h-12 rounded-full bg-emerald-500 flex items-center justify-center";
-                    statusPulse.className = "w-24 h-24 rounded-full bg-emerald-500/20 flex items-center justify-center animate-pulse";
-                    statusVal.className = "text-lg font-bold text-emerald-400";
-                    statusVal.innerText = "SECURE";
-                    emergencyAction.classList.add('hidden');
-                    alarmSound.pause();
-                } 
-                else if (data.status === "NOT_FOUND") {
-                    bodyBg.className = "bg-yellow-950 text-white font-sans antialiased transition-colors duration-500";
-                    statusCard.className = "w-full bg-yellow-900/80 rounded-3xl p-8 text-center shadow-2xl border border-yellow-500 transition-all duration-500";
-                    statusDot.className = "w-12 h-12 rounded-full bg-yellow-500 flex items-center justify-center animate-bounce";
-                    statusPulse.className = "w-24 h-24 rounded-full bg-yellow-600/40 flex items-center justify-center";
-                    statusVal.className = "text-lg font-bold text-yellow-200";
-                    statusVal.innerText = "WEAK";
-                    emergencyAction.classList.remove('hidden');
-                } 
-                else if (data.status === "BREACH") {
-                    bodyBg.className = "bg-red-950 text-white font-sans antialiased transition-colors duration-500";
-                    statusCard.className = "w-full bg-red-900 rounded-3xl p-8 text-center shadow-2xl border border-red-500 transition-all duration-500";
-                    statusDot.className = "w-12 h-12 rounded-full bg-red-500 flex items-center justify-center animate-ping";
-                    statusPulse.className = "w-24 h-24 rounded-full bg-red-600/40 flex items-center justify-center";
-                    statusVal.className = "text-lg font-bold text-red-200";
-                    statusVal.innerText = "LOST";
-                    emergencyAction.classList.remove('hidden');
-                    
-                    if (audioReady) {
-                        alarmSound.play().catch(() => {});
-                    }
-                } 
-                else {
-                    bodyBg.className = "bg-gray-900 text-white font-sans antialiased transition-colors duration-500";
-                    statusCard.className = "w-full bg-gray-800 rounded-3xl p-8 text-center border border-gray-700 transition-all duration-500";
-                    statusDot.className = "w-12 h-12 rounded-full bg-gray-500 flex items-center justify-center";
-                    statusPulse.className = "w-24 h-24 rounded-full bg-gray-700/30 flex items-center justify-center";
-                }
-            };
-
-            socket.onclose = function(e) {
-                console.log(`❌ Closed (code ${e.code}), retrying...`);
-                reconnectAttempts++;
-                if (reconnectAttempts < 10) {
-                    setTimeout(connect, 2000);
-                }
-            };
-
-            socket.onerror = function(e) {
-                console.log("⚠️ Error, will retry...");
-            };
+            if (audioReady) {
+                alarmSound.play().catch(() => {});
+            }
         }
+    };
+
+    socket.onclose = function(e) {
+        // ◄ FIX 2: Give Render 5 seconds to respond before trying again
+        console.log(`❌ [HEDGE] WebSocket disconnected (Code: ${e.code}). Reconnecting in 5s...`);
+        reconnectAttempts++;
+        setTimeout(connect, 5000); 
+    };
+
+    socket.onerror = function(e) {
+        console.error("⚠️ [HEDGE] Connection handshake failed or was rejected by host security layers.", e);
+    };
+}
 
         connect();
     </script>
