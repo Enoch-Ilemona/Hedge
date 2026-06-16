@@ -32,7 +32,7 @@ SCAN_INTERVAL = 1.0  # seconds
 
 # --- CLOUD API CONFIGURATION ---
 # Point to your Render.com deployment
-CLOUD_API_BASE_URL = "https://your-render-app.onrender.com"  # UPDATE THIS
+CLOUD_API_BASE_URL = "https://hedge-2.onrender.com"  # UPDATE THIS
 API_TELEMETRY_ENDPOINT = f"{CLOUD_API_BASE_URL}/api/telemetry"
 
 
@@ -99,12 +99,15 @@ class LocalBLEScanner:
                 new_status = self.last_status
                 msg = "Searching..."
 
-        self.last_status = new_status
+        self.last_status = new_status  
 
+        # Pack the full state context variables before sending to Render
         payload = {
             "child_id": CHILD_ID,
             "child_name": CHILD_NAME,
             "rssi": avg_rssi,
+            "status": new_status,  # ◄ Add this
+            "message": msg         # ◄ Add this
         }
 
         # Log locally
