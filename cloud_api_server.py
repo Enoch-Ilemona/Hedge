@@ -6,12 +6,9 @@ and real-time status broadcasting to the frontend (index.html).
 
 This module receives RSSI data from local_ble_scanner.py and:
 1. Logs telemetry to SQLite database
-2. Broadcasts status updates via WebSocket to connected clients
-3. Serves the frontend HTML dashboard
-
-Deploy this to Render.com:
-- Build: pip install -r requirements.txt
-- Start: uvicorn cloud_api_server:app --host 0.0.0.0 --port 8000
+2. Replays the last known database record to newly connected web clients
+3. Broadcasts status updates via WebSocket to connected clients
+4. Serves the frontend HTML dashboard
 """
 
 import asyncio
@@ -24,7 +21,7 @@ from pydantic import BaseModel
 # Database imports
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, Session
 
 # --- FastAPI App Setup ---
 app = FastAPI(title="Hedge Cloud API", version="1.0")
@@ -39,7 +36,6 @@ app.add_middleware(
 )
 
 # --- DATABASE CONFIGURATION ---
-# Use SQLite for simplicity; upgrade to PostgreSQL for production
 DATABASE_URL = "sqlite:///./hedge_tracker.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -78,7 +74,6 @@ MOCK_BEACON_MAC = "00:1a:7d:da:71:11"
 CHILD_ID = "CH_01"
 CHILD_NAME = "Ifeoluwa Olaloye"
 
-# Thresholds
 STRONG_THRESHOLD = -70
 WEAK_THRESHOLD = -100
 
@@ -145,18 +140,6 @@ class ConnectionManager:
         """Accept new WebSocket connection"""
         await websocket.accept()
         self.active_connections.append(websocket)
-        try:
-            await websocket.send_json(
-                {
-                    "child_id": CHILD_ID,
-                    "child_name": CHILD_NAME,
-                    "rssi": 0,
-                    "status": "INIT",
-                    "message": "System connected, waiting for telemetry...",
-                }
-            )
-        except:
-            pass
 
     def disconnect(self, websocket: WebSocket):
         """Remove disconnected WebSocket"""
@@ -181,16 +164,17 @@ class BeaconPayload(BaseModel):
     child_id: str
     child_name: str
     rssi: int
+    status: str  
+    message: str  
 
 
-# --- FRONTEND ROUTE ---
+# --- FRONTEND ROUTES ---
 @app.get("/")
 def serve_frontend():
     """Serve the dashboard HTML"""
     return FileResponse("index.html")
 
 
-# --- HEALTH CHECK ---
 @app.get("/health")
 def health_check():
     """Health check endpoint"""
@@ -201,58 +185,73 @@ def health_check():
 @app.post("/api/telemetry")
 async def receive_telemetry(payload: BeaconPayload):
     """
-    Receives RSSI telemetry from local BLE scanner.
-    
-    Called by: local_ble_scanner.py
-    Triggered by: Every 1 second poll from local scanner
-    
-    Args:
-        payload: {child_id, child_name, rssi}
-    
-    Returns:
-        {status: "Processed", child_status: "SECURE|NOT_FOUND|BREACH"}
+    Receives processed telemetry from local BLE scanner and broadcasts downstream.
     """
-    # Determine security status based on RSSI threshold
-    if payload.rssi >= STRONG_THRESHOLD:
-        status = "SECURE"
-    elif payload.rssi >= WEAK_THRESHOLD:
-        status = "NOT_FOUND"
-    else:
-        status = "BREACH"
+    status = payload.status 
 
-    # Log to database
+    # Log telemetry entry straight to SQLite
     log_telemetry_to_db(payload.child_id, payload.rssi, status, STRONG_THRESHOLD)
 
-    # Broadcast to all connected WebSocket clients
+    # Forward data packet downstream to the browser dashboard
     broadcast_payload = {
         "child_id": payload.child_id,
         "child_name": payload.child_name,
         "rssi": payload.rssi,
         "status": status,
-        "message": "Secure" if status == "SECURE" else "Alert!",
+        "message": payload.message, 
     }
     await manager.broadcast(broadcast_payload)
 
-    print(
-        f"📊 Telemetry logged: {payload.child_name} | RSSI: {payload.rssi} dBm | Status: {status}"
-    )
-
+    print(f"📊 Telemetry logged: {payload.child_name} | RSSI: {payload.rssi} dBm | Status: {status}")
     return {"status": "Processed", "child_status": status}
 
 
-# --- WEBSOCKET ENDPOINT ---
+# --- WEBSOCKET ENDPOINT (WITH HISTORICAL BACKFILL) ---
 @app.websocket("/ws/monitor")
 async def websocket_endpoint(websocket: WebSocket):
     """
     WebSocket endpoint for frontend real-time dashboard updates.
-    
-    Connected by: index.html JavaScript
-    Receives broadcasts from: /api/telemetry endpoint
+    Fetches the latest recorded state from the database immediately upon connection.
     """
     await manager.connect(websocket)
+    
+    # ⚡ NEW: Pull the most recent logged beacon state from SQL on connection
+    db: Session = SessionLocal()
+    try:
+        last_log = (
+            db.query(BeaconTelemetry)
+            .filter(BeaconTelemetry.child_id == CHILD_ID)
+            .order_by(BeaconTelemetry.id.desc())  # Corrected sorting query method
+            .first()
+        )
+        
+        if last_log:
+            # Deliver last known history log right away so the dashboard fills in instantly
+            await websocket.send_json({
+                "child_id": last_log.child_id,
+                "child_name": CHILD_NAME,
+                "rssi": last_log.current_rssi,
+                "status": last_log.current_status,
+                "message": f"Last seen at {last_log.timestamp.strftime('%H:%M:%S')} (Restored from log)"
+            })
+        else:
+            # Fallback initialization if database is completely empty
+            await websocket.send_json({
+                "child_id": CHILD_ID,
+                "child_name": CHILD_NAME,
+                "rssi": 0,
+                "status": "INIT",
+                "message": "System connected, waiting for telemetry scanner...",
+            })
+    except Exception as e:
+        print(f"⚠️ Error fetching initial database state: {e}")
+    finally:
+        db.close()
+
+    # Maintain live communication pipe
     try:
         while True:
-            # Keep connection alive and listen for messages
+            # Keep socket alive and listen for browser close actions
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
