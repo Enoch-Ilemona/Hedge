@@ -12,6 +12,7 @@ This module receives RSSI data from local_ble_scanner.py and:
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -22,18 +23,6 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, String, Integer, DateTime, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-
-# --- FastAPI App Setup ---
-app = FastAPI(title="Hedge Cloud API", version="1.0")
-
-# Enable CORS for cross-origin requests
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # --- DATABASE CONFIGURATION ---
 DATABASE_URL = "sqlite:///./hedge_tracker.db"
@@ -168,6 +157,31 @@ class BeaconPayload(BaseModel):
     message: str  
 
 
+# --- MODERN LIFESPAN LIFECYCLE MANAGEMENT ---
+# ◄ FIXED: Switched from deprecated on_event to modern lifespan context manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Guarantees table creation and configuration execution prior to processing requests"""
+    initialize_and_seed_database()
+    print("✅ Cloud API Server started successfully via Lifespan Engine!")
+    print("📱 Waiting for telemetry from local BLE scanner...")
+    yield
+    # Clean up operations go here on shutdown if needed
+
+
+# --- FastAPI App Setup ---
+app = FastAPI(title="Hedge Cloud API", version="1.0", lifespan=lifespan)
+
+# Enable CORS for cross-origin requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 # --- FRONTEND ROUTES ---
 @app.get("/")
 def serve_frontend():
@@ -211,22 +225,19 @@ async def receive_telemetry(payload: BeaconPayload):
 async def websocket_endpoint(websocket: WebSocket):
     """
     WebSocket endpoint for frontend real-time dashboard updates.
-    Fetches the latest recorded state from the database immediately upon connection.
     """
     await manager.connect(websocket)
     
-    # ⚡ NEW: Pull the most recent logged beacon state from SQL on connection
     db: Session = SessionLocal()
     try:
         last_log = (
             db.query(BeaconTelemetry)
             .filter(BeaconTelemetry.child_id == CHILD_ID)
-            .order_by(BeaconTelemetry.id.desc())  # Corrected sorting query method
+            .order_by(BeaconTelemetry.id.desc())
             .first()
         )
         
         if last_log:
-            # Deliver last known history log right away so the dashboard fills in instantly
             await websocket.send_json({
                 "child_id": last_log.child_id,
                 "child_name": CHILD_NAME,
@@ -235,7 +246,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 "message": f"Last seen at {last_log.timestamp.strftime('%H:%M:%S')} (Restored from log)"
             })
         else:
-            # Fallback initialization if database is completely empty
             await websocket.send_json({
                 "child_id": CHILD_ID,
                 "child_name": CHILD_NAME,
@@ -248,20 +258,9 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         db.close()
 
-    # Maintain live communication pipe
     try:
         while True:
-            # Keep socket alive and listen for browser close actions
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
         print("🔌 WebSocket client disconnected")
-
-
-# --- STARTUP EVENT ---
-@app.on_event("startup")
-async def startup_event():
-    """Initialize database on startup"""
-    initialize_and_seed_database()
-    print("✅ Cloud API Server started successfully!")
-    print("📱 Waiting for telemetry from local BLE scanner...")
