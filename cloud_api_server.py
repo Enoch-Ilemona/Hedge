@@ -11,6 +11,7 @@ This module receives RSSI data from local_ble_scanner.py and:
 4. Serves the frontend HTML dashboard
 """
 
+import os
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -25,7 +26,12 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 
 # --- DATABASE CONFIGURATION ---
-DATABASE_URL = "sqlite:///./hedge_tracker.db"
+import os
+
+# --- DATABASE CONFIGURATION ---
+# ◄ FIX: Force an absolute environment path so Render can always read/write the DB securely
+DATABASE_URL = "sqlite:////tmp/hedge_tracker.db" 
+
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -221,6 +227,7 @@ async def receive_telemetry(payload: BeaconPayload):
 
 
 # --- WEBSOCKET ENDPOINT (WITH HISTORICAL BACKFILL) ---
+# --- WEBSOCKET ENDPOINT (WITH HISTORICAL BACKFILL) ---
 @app.websocket("/ws/monitor")
 async def websocket_endpoint(websocket: WebSocket):
     """
@@ -258,9 +265,20 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         db.close()
 
+    # ◄ FIXED: Robust asynchronous handling loop for Render deployment nodes
     try:
         while True:
-            await websocket.receive_text()
+            # Using a short timeout ensures the worker thread doesn't hang or close arbitrarily
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=20.0)
+            except asyncio.TimeoutError:
+                # Send a faint heartbeat pulse to the browser to ensure Render proxy keeps channel alive
+                await websocket.send_json({"status": "HEARTBEAT", "message": "Keep-Alive Ping"})
+                continue
+
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        print("🔌 WebSocket client disconnected")
+        print("🔌 WebSocket client disconnected clean.")
+    except Exception as e:
+        manager.disconnect(websocket)
+        print(f"⚠️ WebSocket connection dropped implicitly by host runtime: {e}")
