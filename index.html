@@ -83,25 +83,32 @@
         document.addEventListener('click', enableAudio, { once: true });
 
         function connect() {
-    // ◄ FIX 1: Force it to explicitly use Render. No local fallbacks to confuse the loop.
-    const wsUrl = 'wss://hedge-2.onrender.com/ws/monitor'; 
+    // ◄ FIX 1: Automatically inherit Render's secure protocol (wss:// or ws://) dynamically
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.host;
+    const wsUrl = `${protocol}//${host}/ws/monitor`;
     
-    console.log(`🔌 [HEDGE] Connecting directly to Cloud Engine: ${wsUrl}`);
+    console.log(`🔌 [HEDGE] Connecting dynamically via host tunnel: ${wsUrl}`);
     systemMessage.innerText = `Connecting to cloud engine (Attempt ${reconnectAttempts + 1})...`;
     
     socket = new WebSocket(wsUrl);
 
     socket.onopen = function() {
-        console.log("✅ [HEDGE] Connected securely to live Render WebSocket pipe!");
+        console.log("✅ [HEDGE] WebSocket pipeline successfully locked and open!");
         reconnectAttempts = 0;
         systemMessage.innerText = "Scanning for beacon signals...";
     };
 
     socket.onmessage = function(event) {
         const data = JSON.parse(event.data);
-        console.log("📥 [HEDGE] Telemetry received:", data);
+        console.log("📥 [HEDGE] Data packet processed:", data);
         
-        // Update layout text elements
+        // Ignore internal keep-alive heatbeats from closing the channel
+        if (data.status === "HEARTBEAT") {
+            return; 
+        }
+
+        // Update layout text elements smoothly
         childName.innerText = data.child_name || "Ifeoluwa Olaloye";
         childId.innerText = data.child_id || "CH_01";
         rssiVal.innerText = data.rssi + " dBm";
@@ -118,7 +125,7 @@
             emergencyAction.classList.add('hidden');
             alarmSound.pause();
         } 
-        else if (data.status === "NOT_FOUND") {
+        else if (data.status === "NOT_FOUND" || data.status === "WEAK") {
             bodyBg.className = "bg-yellow-950 text-white font-sans antialiased transition-colors duration-500";
             statusCard.className = "w-full bg-yellow-900/80 rounded-3xl p-8 text-center shadow-2xl border border-yellow-500 transition-all duration-500";
             statusDot.className = "w-12 h-12 rounded-full bg-yellow-500 flex items-center justify-center animate-bounce";
@@ -128,7 +135,7 @@
             emergencyAction.classList.remove('hidden');
             alarmSound.pause();
         } 
-        else if (data.status === "BREACH") {
+        else if (data.status === "BREACH" || data.status === "LOST") {
             bodyBg.className = "bg-red-950 text-white font-sans antialiased transition-colors duration-500";
             statusCard.className = "w-full bg-red-900 rounded-3xl p-8 text-center shadow-2xl border border-red-500 transition-all duration-500";
             statusDot.className = "w-12 h-12 rounded-full bg-red-500 flex items-center justify-center";
@@ -144,17 +151,16 @@
     };
 
     socket.onclose = function(e) {
-        // ◄ FIX 2: Give Render 5 seconds to respond before trying again
-        console.log(`❌ [HEDGE] WebSocket disconnected (Code: ${e.code}). Reconnecting in 5s...`);
+        // ◄ FIX 2: If Render drops the connection, back off for 3 seconds and retry cleanly
+        console.log(`❌ [HEDGE] Connection reset by host (Code: ${e.code}). Reconnecting...`);
         reconnectAttempts++;
-        setTimeout(connect, 5000); 
+        setTimeout(connect, 3000); 
     };
 
     socket.onerror = function(e) {
-        console.error("⚠️ [HEDGE] Connection handshake failed or was rejected by host security layers.", e);
+        console.error("⚠️ [HEDGE] Routing layer mismatch or handshake rejected.", e);
     };
 }
-
         connect();
     </script>
 </body>
