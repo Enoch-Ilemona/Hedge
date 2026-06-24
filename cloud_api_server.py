@@ -325,5 +325,4 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))   # Render injects PORT at runtime
     print(f"🚀 Starting Hedge Cloud API as instance: '{INSTANCE_NAME}' on port {port}")
     uvicorn.run("cloud_api_server:app", host="0.0.0.0", port=port, reload=False)
-        manager.disconnect(websocket)
-        print(f"⚠️ WebSocket connection dropped implicitly by host runtime: {e}")
+    
