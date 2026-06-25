@@ -17,9 +17,9 @@ from datetime import datetime
 from typing import Dict, Optional
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
-TARGET_NAME = "Melody's A07"
+TARGET_NAME = "Aduojo Enoch's A06"
 CHILD_ID    = "CH_01"
-CHILD_NAME  = "Ifeoluwa Olaloye"
+CHILD_NAME  = "Emma Ilemona"
 
 # RSSI thresholds (dBm)
 STRONG_THRESHOLD = -70          # ≥ this  → SECURE
@@ -40,7 +40,7 @@ LOST_AFTER_SEC = NOT_FOUND_GRACE_SEC + (MIN_CONSECUTIVE_FOR_LOST * SCAN_INTERVAL
 
 CLOUD_TARGETS = {
     "local":  "http://localhost:8000",
-    "render": "https://hedge-trial.onrender.com",
+    "render": "https://hedge-8skg.onrender.com",
 }
 
 REQUEST_TIMEOUT = 5
