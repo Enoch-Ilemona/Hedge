@@ -71,7 +71,7 @@ class BeaconTelemetry(Base):
 MOCK_GUARDIAN_ID = "g-uuid-1111-2222"
 MOCK_BEACON_MAC  = "00:1a:7d:da:71:11"
 CHILD_ID         = "CH_01"
-CHILD_NAME       = "Ifeoluwa Olaloye"
+CHILD_NAME       = "Emma Ilemona"
 
 STRONG_THRESHOLD = -70
 WEAK_THRESHOLD   = -100
