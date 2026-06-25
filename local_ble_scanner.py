@@ -14,44 +14,57 @@ import requests
 from bleak import BleakScanner
 from collections import deque
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, Optional
 
 # ─── CONFIGURATION ───────────────────────────────────────────────────────────
-TARGET_NAME = "Melody's A07"       # BLE advertisement name to track
+TARGET_NAME = "Melody's A07"
 CHILD_ID    = "CH_01"
 CHILD_NAME  = "Ifeoluwa Olaloye"
 
 # RSSI thresholds (dBm)
-STRONG_THRESHOLD = -70             # ≥ this  →  SECURE
-WEAK_THRESHOLD   = -100            # ≥ this  →  WEAK  (else BREACH if detected)
+STRONG_THRESHOLD = -70          # ≥ this  → SECURE
+WEAK_THRESHOLD   = -100         # ≥ this  → WEAK   (else BREACH/LOST)
 
-# Polling / smoothing
-RSSI_BUFFER_SIZE           = 5     # sliding-window size
-MIN_CONSECUTIVE_FOR_BREACH = 5     # missed cycles before BREACH
-SCAN_INTERVAL              = 1.0   # seconds between telemetry posts
+# ── Smoothing ────────────────────────────────────────────────────────────────
+# NEW APPROACH: an EMA (exponential moving average) updated on *every*
+# advertisement the instant it's received (not once per poll cycle). Recent
+# readings dominate immediately, so status tracks real movement closely,
+# while still smoothing out single-packet jitter (±3-5 dBm).
+EMA_ALPHA = 0.4   # higher = snappier / less smoothing, lower = smoother / slower
 
+# Time tiers for "how long since we last actually heard the beacon"
+NOT_FOUND_GRACE_SEC = 2.5    # below this → still considered "live"
+MIN_CONSECUTIVE_FOR_LOST = 5  # cycles of silence (after grace) → LOST
+SCAN_INTERVAL = 1.0          # seconds between telemetry posts
+LOST_AFTER_SEC = NOT_FOUND_GRACE_SEC + (MIN_CONSECUTIVE_FOR_LOST * SCAN_INTERVAL)
 
 CLOUD_TARGETS = {
     "local":  "http://localhost:8000",
-    "render": "https://hedge-trial.onrender.com",   # ← change to your real Render URL
+    "render": "https://hedge-trial.onrender.com",
 }
 
-REQUEST_TIMEOUT = 5      # seconds, per-target HTTP timeout
-RENDER_TIMEOUT   = 12     # Render free-tier instances can be slow to wake from sleep
+REQUEST_TIMEOUT = 5
+RENDER_TIMEOUT  = 12
 
 
 # ─── SCANNER CLASS ───────────────────────────────────────────────────────────
 class LocalBLEScanner:
     def __init__(self):
-        self.rssi_buffer            = deque(maxlen=RSSI_BUFFER_SIZE)
-        self.consecutive_not_found  = 0
-        self.last_status            = "INIT"
-        self.last_seen_time         = datetime.now()
-        self.running                = False
 
-        # Per-target health tracking so we can log "target X has been down
-        # for N cycles" instead of spamming identical error lines.
-        self._target_failure_streak: Dict[str, int] = {name: 0 for name in CLOUD_TARGETS}
+        self.smoothed_rssi: Optional[float] = None
+
+        self.last_known_rssi: Optional[int] = None
+
+        self.consecutive_not_found = 0
+        self.last_status           = "INIT"
+        self.last_seen_time        = datetime.now()
+        self.running               = False
+
+        self._fresh_reading = False
+
+        self._trend_history: deque = deque(maxlen=6)
+
+        self._target_failure_streak: Dict[str, int] = {n: 0 for n in CLOUD_TARGETS}
 
     # ── BLE callback ─────────────────────────────────────────────────────────
     async def detection_callback(self, device, adv_data):
@@ -59,101 +72,123 @@ class LocalBLEScanner:
         if name and TARGET_NAME.lower() in name.lower():
             self.consecutive_not_found = 0
             self.last_seen_time        = datetime.now()
-            self.rssi_buffer.append(adv_data.rssi)
-            print(f"📡 Beacon detected: {name} | RSSI: {adv_data.rssi} dBm")
+
+    
+            if self.smoothed_rssi is None:
+                self.smoothed_rssi = float(adv_data.rssi)
+            else:
+                self.smoothed_rssi = (
+                    EMA_ALPHA * adv_data.rssi + (1 - EMA_ALPHA) * self.smoothed_rssi
+                )
+            self._fresh_reading = True
+
+            print(f"📡 Beacon detected: {name} | RSSI: {adv_data.rssi} dBm | EMA: {round(self.smoothed_rssi)} dBm")
 
     # ── Status calculation ────────────────────────────────────────────────────
     async def calculate_status(self) -> Dict:
-        """
-        Builds the telemetry payload.
-
-        Status contract
-        ───────────────
-        SECURE      beacon visible AND RSSI ≥ STRONG_THRESHOLD
-        WEAK        beacon visible AND STRONG > RSSI ≥ WEAK_THRESHOLD
-        NOT_FOUND   beacon timed out, consecutive misses < MIN_CONSECUTIVE
-        BREACH      beacon timed out, consecutive misses ≥ MIN_CONSECUTIVE
-        """
         elapsed = (datetime.now() - self.last_seen_time).total_seconds()
+        beacon_live = elapsed <= NOT_FOUND_GRACE_SEC
 
-        # Age out the buffer slowly when beacon is missing
-        if elapsed > 2.5:
+        if not beacon_live:
             self.consecutive_not_found += 1
-            if self.rssi_buffer:
-                self.rssi_buffer.popleft()
 
-        avg_rssi = (
-            round(sum(self.rssi_buffer) / len(self.rssi_buffer))
-            if self.rssi_buffer
-            else -120
-        )
+        # ── Trend (direction of travel) ───────────────────────────────────────
+        # Sample the EMA once per cycle into a slower window purely for
+        # computing movement direction. A 5 dBm net change across the window
+        # is needed to call a direction — large enough to ignore jitter but
+        # small enough to catch real movement within a few seconds.
+        DEAD_BAND = 5
+        if self._fresh_reading and self.smoothed_rssi is not None:
+            self._trend_history.append(self.smoothed_rssi)
+        self._fresh_reading = False
 
-        if elapsed <= 2.5:
-            # Beacon was seen recently
-            if avg_rssi >= STRONG_THRESHOLD:
+        if len(self._trend_history) >= 2:
+            oldest = self._trend_history[0]
+            newest = self._trend_history[-1]
+            delta  = newest - oldest        # positive = stronger signal = closer
+            if delta > DEAD_BAND:
+                trend = "approaching"
+            elif delta < -DEAD_BAND:
+                trend = "departing"
+            else:
+                trend = "steady"
+        else:
+            trend = "steady"
+
+        # ── Status & message ──────────────────────────────────────────────────
+        if beacon_live:
+            # LIVE tier: trust the EMA, it's at most one advertisement old.
+            current_rssi = round(self.smoothed_rssi) if self.smoothed_rssi is not None else None
+            self.last_known_rssi = current_rssi
+
+            if current_rssi is not None and current_rssi >= STRONG_THRESHOLD:
                 status = "SECURE"
                 msg    = "Phone inside safe perimeter"
-            elif avg_rssi >= WEAK_THRESHOLD:
+            elif current_rssi is not None and current_rssi >= WEAK_THRESHOLD:
                 status = "WEAK"
                 msg    = "Signal weak — move closer"
             else:
                 status = "BREACH"
                 msg    = "Signal critically low!"
-        else:
-            # Beacon has not been seen for > 2.5 s
-            if self.consecutive_not_found >= MIN_CONSECUTIVE_FOR_BREACH:
+
+        elif elapsed <= LOST_AFTER_SEC:
+         
+            current_rssi = self.last_known_rssi
+            if current_rssi is not None and current_rssi >= STRONG_THRESHOLD:
+                status = "SECURE"
+                msg    = "Phone inside safe perimeter"
+            elif current_rssi is not None and current_rssi >= WEAK_THRESHOLD:
+                status = "WEAK"
+                msg    = "Signal weak — beacon drifting out of range"
+            else:
                 status   = "BREACH"
                 msg      = "Beacon NOT DETECTED"
-                avg_rssi = -120
-            else:
-                status = "NOT_FOUND"                    # searching, not yet BREACH
-                msg    = "Searching for beacon…"
+                current_rssi = None
+
+        else:
+          
+            status        = "LOST"
+            msg           = "Beacon signal lost"
+            current_rssi  = None
+            self.smoothed_rssi   = None
+            self.last_known_rssi = None
+            self._trend_history.clear()
 
         self.last_status = status
 
-        # Console feedback
-        if elapsed <= 2.5:
-            print(f"📱 {CHILD_NAME} | RSSI: {avg_rssi} dBm | {status}")
+        if beacon_live:
+            print(f"📱 {CHILD_NAME} | RSSI: {current_rssi} dBm | {status} | trend: {trend}")
         else:
             print(
                 f"🚫 {CHILD_NAME} | NOT SEEN | {status} "
-                f"(missed cycles: {self.consecutive_not_found})"
+                f"(missed: {self.consecutive_not_found}) | trend: {trend}"
             )
 
         return {
             "child_id":   CHILD_ID,
             "child_name": CHILD_NAME,
-            "rssi":       avg_rssi,
+            "rssi":       current_rssi,    # None → frontend shows '--'
             "status":     status,
             "message":    msg,
+            "trend":      trend,       # 'approaching' | 'departing' | 'steady'
         }
 
-    # ── HTTP POST (thread-pool safe, single target) ──────────────────────────
+    # ── HTTP POST ─────────────────────────────────────────────────────────────
     def _post_sync(self, name: str, base_url: str, payload: Dict) -> bool:
-        """
-        Synchronous POST to ONE target — called via asyncio.to_thread so it
-        never blocks the BLE event loop. Failures here are caught and
-        reported but never raised, so one bad target can't take down the
-        other dispatch tasks running alongside it.
-        """
         endpoint = f"{base_url}/api/telemetry"
         timeout  = RENDER_TIMEOUT if name == "render" else REQUEST_TIMEOUT
         try:
             r = requests.post(endpoint, json=payload, timeout=timeout)
             if r.status_code == 200:
-                result = r.json()
                 self._target_failure_streak[name] = 0
-                print(f"☁️  [{name}] ACK: {result.get('child_status', 'UNKNOWN')}")
+                print(f"☁️  [{name}] ACK: {r.json().get('child_status', 'UNKNOWN')}")
                 return True
-            else:
-                self._target_failure_streak[name] += 1
-                print(f"❌ [{name}] HTTP {r.status_code}: {r.text[:120]}")
-                return False
+            self._target_failure_streak[name] += 1
+            print(f"❌ [{name}] HTTP {r.status_code}: {r.text[:120]}")
+            return False
         except requests.exceptions.ConnectionError:
             self._target_failure_streak[name] += 1
             streak = self._target_failure_streak[name]
-            # Only print the full hint occasionally to avoid log spam once a
-            # target has clearly been down for a while.
             if streak <= 3 or streak % 30 == 0:
                 print(f"❌ [{name}] Cannot reach {base_url} (fail streak: {streak})")
             return False
@@ -166,26 +201,14 @@ class LocalBLEScanner:
             print(f"❌ [{name}] POST error: {exc}")
             return False
 
-    # ── Fan-out dispatch to every configured target ─────────────────────────
     async def send_to_targets(self, payload: Dict) -> Dict[str, bool]:
-        """
-        Sends the SAME payload to every entry in CLOUD_TARGETS concurrently.
-        Each target runs in its own thread so a slow/down target (e.g. a
-        sleeping Render free instance) never delays delivery to the others —
-        local DB logging and local frontend broadcast happen on their own
-        timeline regardless of what Render is doing.
-        """
         tasks = {
             name: asyncio.to_thread(self._post_sync, name, base_url, payload)
             for name, base_url in CLOUD_TARGETS.items()
         }
         results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-        return {
-            name: (res is True)
-            for name, res in zip(tasks.keys(), results)
-        }
+        return {name: (res is True) for name, res in zip(tasks.keys(), results)}
 
-    # ── Connectivity pre-check (all targets) ─────────────────────────────────
     async def check_cloud_connectivity(self):
         for name, base_url in CLOUD_TARGETS.items():
             health_url = f"{base_url}/health"
@@ -198,32 +221,29 @@ class LocalBLEScanner:
                 if r.status_code == 200:
                     print(f"✅ [{name}] Reachable: {r.json()}")
                 else:
-                    print(f"⚠️  [{name}] Responded with HTTP {r.status_code}")
+                    print(f"⚠️  [{name}] HTTP {r.status_code}")
             except Exception as exc:
                 print(f"⚠️  [{name}] Health check failed: {exc}")
                 if name == "local":
                     print("    Make sure cloud_api_server.py is running locally first.")
                 else:
-                    print("    Render free-tier instances can take 30-60s to wake up — this is normal on first ping.")
+                    print("    Render free-tier can take 30-60s to wake up.")
 
-    # ── Main scan loop ────────────────────────────────────────────────────────
     async def start_scanning(self):
         print(f"🔍 BLE Scanner starting — tracking: {TARGET_NAME}")
         for name, base_url in CLOUD_TARGETS.items():
             print(f"☁️  Target [{name}]: {base_url}")
-
         await self.check_cloud_connectivity()
 
         scanner = BleakScanner(detection_callback=self.detection_callback)
         await scanner.start()
         self.running = True
-
         try:
             while self.running:
                 payload = await self.calculate_status()
                 outcome = await self.send_to_targets(payload)
-                ok   = [n for n, success in outcome.items() if success]
-                fail = [n for n, success in outcome.items() if not success]
+                fail = [n for n, ok in outcome.items() if not ok]
+                ok   = [n for n, ok in outcome.items() if ok]
                 if fail:
                     print(f"   ↳ delivered: {ok or '—'} | failed: {fail}")
                 await asyncio.sleep(SCAN_INTERVAL)
@@ -238,11 +258,12 @@ class LocalBLEScanner:
         self.running = False
 
 
-# ─── ENTRY POINT ─────────────────────────────────────────────────────────────
 async def main():
     scanner = LocalBLEScanner()
     await scanner.start_scanning()
 
+if __name__ == "__main__":
+    asyncio.run(main())
 
 if __name__ == "__main__":
     asyncio.run(main())
